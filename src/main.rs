@@ -1,31 +1,27 @@
-// #![allow(unused_must_use)]
-// #![allow(dead_code)]
-// TODO: get reference as pitch rate from experiment description file
-
 mod dim_analysis;
 use dim_analysis::*;
 
-use core::panic;
+use std::env;
 use std::fs::{self, OpenOptions,File};
 use std::io::{BufWriter, Write};
+use std::collections::{HashMap, BTreeMap};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Mutex; 
+use core::panic;
+use itertools::Itertools;
+use time::PrimitiveDateTime;
 use plotters::prelude::*;
 use plotters::style::colors::colormaps::ViridisRGB;
 use toml::{Table, Value};
-use time::PrimitiveDateTime;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
-use std::collections::{HashMap, BTreeMap};
-use regex::Regex;
-use petgraph::{graphmap::DiGraphMap, dot::{Dot, Config}, visit::{Dfs, Reversed, Bfs}, prelude::GraphMap};
 use toml::map::Map;
+use walkdir::WalkDir;
+use regex::Regex;
+use petgraph::{graphmap::DiGraphMap, dot::{Dot, Config}, visit::{Dfs, Reversed, Bfs}};
 use argmin::core::{State, Error, Executor, CostFunction};
 use argmin::solver::neldermead::NelderMead;
 use ndarray::Array1;
-use std::sync::Mutex; 
 use qrcode_generator::QrCodeEcc;
-use itertools::Itertools;
-use std::process::Command;
-use std::env;
 
 lazy_static::lazy_static! { static ref WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new()); }
 
@@ -42,7 +38,6 @@ const OUTPUT_QRCODES_DIR: &str = "output/qrcodes/";
 const OUTPUT_TOMLS_DIR: &str = "output/tomls/";
 
 const GENEALOGY_NAME: &str = "genealogy";
-const GENEALOGY_NAME_THINNED: &str = "genealogy-thinned";
 const YEAST_PAGE_PATH: &str = "../content/info/yeast.md"; 
 const LEGEND: &str =r##"
 digraph {
@@ -274,10 +269,9 @@ fn components_into_problems(components: HashMap<String, Nodes>) -> HashMap<Strin
                     let points: Vec<NelderMeadPoint> = measurements
                         .into_iter()
                         .filter_map(|measurement| read_uniformity_point(measurement).ok())
-                        .filter(|point| point.concentration.is_some() && point.density.is_some())
+                        .filter(|point| point.concentration.is_some())
                         .map (|point| NelderMeadPoint {
                             conc: point.concentration.unwrap(),
-                            density: point.density.unwrap(),
                             hours: (point.timestamp - reference_time).as_seconds_f64()/(60.0*60.0)})
                         .collect();
     
@@ -381,7 +375,7 @@ fn initial_simplex_nd(number_of_dimensions: usize) -> Vec<Vec<f64>> {
 #[derive(Debug, Clone)]
 struct NelderMeadPoint {
     conc: O32<UnitDensity>,
-    density: O32<MassDensity>,
+    // density: O32<MassDensity>,
     hours: f64,
 }
 #[derive(Debug, Clone)]
@@ -510,7 +504,7 @@ fn log_nelder_mead_solutions(component_id: &String, nm: &NelderMeadComponentProb
                 writeln!(buffer, "Used reference time: {:?}\n", single_problem.reference_time).unwrap();
             }
 
-            plot_count(&component_id, &nm, &nm_solution);
+            let _ = plot_count(&component_id, &nm, &nm_solution);
     }
 }
 
@@ -632,43 +626,6 @@ fn plot_count(component_id: &String, nm: &NelderMeadComponentProblem, nm_solutio
     Ok(())
 }
 
-fn plot_density(id:&str, plot_name: &str, nm: &NelderMeadSingleProblem) -> Result<(), DrawingAreaErrorKind<std::io::Error>> {
-    let root_drawing_area = SVGBackend::new(&plot_name, (1024, 768)).into_drawing_area();
-    root_drawing_area.fill(&WHITE).unwrap();
-
-    let time_min_shown = 0f64; // hours
-    let time_max_shown = 75f64; // hours
-    let density_min_shown = 1f64;
-    let density_max_shown = 1.1f64;
-
-    let mut ctx = ChartBuilder::on(&root_drawing_area)
-        .set_label_area_size(LabelAreaPosition::Left, 100)
-        .set_label_area_size(LabelAreaPosition::Bottom, 60)
-        .caption(id, ("sans-serif", 40))
-        .build_cartesian_2d(time_min_shown..time_max_shown, density_min_shown..density_max_shown)?;
-
-    ctx.configure_mesh()
-        .x_desc("relative time, hours")
-        .axis_desc_style(("sans-serif", 40))
-        .x_label_formatter(&|x| format!("{}", x))
-        .x_label_style(("sans-serif", 20))
-        .y_desc("relative density")
-        .y_label_style(("sans-serif", 20))
-        .draw()?;
-    
-
-    ctx.draw_series(
-        nm.points.clone().into_iter().filter_map(|p| {
-            Some(ErrorBar::new_vertical(
-                p.hours,
-                (p.density.v - p.density.e) as f64 / 1000f64,
-                p.density.v as f64 / 1000f64,
-                (p.density.v + p.density.e) as f64 / 1000f64,
-                BLUE.filled(), 10))}
-    ))?;
-    Ok(())
-}
-
 fn plot_genealogy(pathname: String, nodes: Nodes, clickable_links: HashMap<String, String>, legend: bool) {
     //// Uses the graphwiz program, which is called via shell.
     fs::create_dir_all(OUTPUT_GENEALOGY_DIR).expect("Failed to create directory.");
@@ -763,7 +720,7 @@ fn populate_site_pages(nodes: Nodes, components: &HashMap<String, Nodes>, soluti
             let packaging_id = id;
             let ancestors_id = components.iter()
             .find(|&(_, nodes_map)| nodes_map.contains_key(id))
-            .map(|(component_id, nodes_map)| {component_id.clone()})
+            .map(|(component_id, _nodes_map)| {component_id.clone()})
             .unwrap();
         
             let ancestors_toml_map = nodes.get(ancestors_id.as_str()).unwrap(); 
@@ -840,7 +797,7 @@ fn populate_site_pages(nodes: Nodes, components: &HashMap<String, Nodes>, soluti
         slant_file.write_all(slant_page_text.as_bytes()).unwrap();
         
         fs::create_dir_all(OUTPUT_TOMLS_DIR).expect("Failed to create directory.");
-        for (component_id, component) in components.iter() {
+        for (_component_id, component) in components.iter() {
             for (individual_id, toml_map) in component {
                 let toml_file_pathname = format!("{}/{}.txt", OUTPUT_TOMLS_DIR, individual_id); 
                 let toml_file = File::create(toml_file_pathname).unwrap();

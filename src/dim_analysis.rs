@@ -56,46 +56,6 @@ impl O32<E> {
             u: E{},
         }
     }
-
-    pub fn exact(value: u32) -> Self {
-        O32::<E> {
-            v: value as f32,
-            e: 0.0,
-            u: E{},
-        }
-    }
-
-    pub fn log2(self) -> Self {
-        O32::<E> {
-            v: self.v.log2(),
-            e: self.e/(self.v*(2f32.ln())),
-            u: E{},
-        }
-    }
-
-    pub fn ln(self) -> Self {
-        O32::<E> {
-            v: self.v.ln(),
-            e: self.e/self.v,
-            u: E{},
-        }
-    }
-}
-
-impl <U: PDimension> O32<U> {
-    /// Get unitless value of something, by dividing by SI standard. Should be used to get log.
-    fn unitless(self) -> O32<E> {
-        O32::<E> {
-            v: self.v,
-            e: self.e,
-            u: E{}
-        }
-    }
-
-    /// Convert value to its unitless log value by normalizing with SI unit.
-    pub fn log2(self) -> O32<E> {
-        self.unitless().log2()
-    }
 }
 
 impl O32<Volume> {
@@ -115,8 +75,8 @@ impl O32<Volume> {
                 _ => Err(ReadError::UnitNotImplemented),
             },
             None => Ok(Self{
-                v: v,
-                e: e,
+                v,
+                e,
                 u: Volume{},
             }),
         }
@@ -140,39 +100,15 @@ impl O32<Mass> {
                 _ => Err(ReadError::UnitNotImplemented),
             },
             None => Ok(Self{
-                v: v,
-                e: e,
+                v,
+                e,
                 u: Mass{},
             }),
         }
     }
 }
 
-impl O32<MassDensity> {
-    pub fn parse(input: Measurement) -> Result<Self, ReadError> {
-        let v = input.value;
-        let e = match input.error {
-            Some(a) => a,
-            None => return Err(ReadError::UncertaintyMissing),
-        };
-        match input.unit {
-            Some(a) => match a.as_str() {
-                "g/ml" => Ok(Self{
-                    v: v*1E3,
-                    e: e*1E3,
-                    u: MassDensity{},
-                }),
-                _ => Err(ReadError::UnitNotImplemented),
-            },
-            None => Ok(Self{
-                v: v,
-                e: e,
-                u: MassDensity{},
-            }),
-        }
-    }
-
-}
+impl O32<MassDensity> {}
 
 impl <U: Dimension> ops::Add for O32<U> {
     type Output = Self;
@@ -304,10 +240,6 @@ fn mean_weighted<U: Dimension>(data: &[O32<U>]) -> O32<U> {
     }
 }
 
-fn average<U: Dimension>(data: &[O32<U>]) -> O32<U> {
-    mean_weighted(data)
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Measurement {
     pub value: f32,
@@ -323,7 +255,6 @@ pub struct UniformityExperiment {
 #[derive(Debug, Deserialize)]
 pub struct UniformityMeasurement {
     pub time: Value,
-    pub density: Option<Measurement>,
     pub count: Option<Count>,
     pub dilution: Option<Dilution>,
 }
@@ -333,7 +264,6 @@ pub struct UniformityMeasurement {
 pub struct UniformityPoint {
     pub timestamp: PrimitiveDateTime,
     pub concentration: Option<O32<UnitDensity>>,
-    pub density: Option<O32<MassDensity>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -393,12 +323,7 @@ pub fn read_uniformity_point(data: UniformityMeasurement) -> Result<UniformityPo
         None => None,
     };
 
-    let density = match data.density {
-        Some(density) => Some(O32::<MassDensity>::parse(density)?),
-        None => None,
-    };
-
-    Ok(UniformityPoint { timestamp, concentration, density })
+    Ok(UniformityPoint { timestamp, concentration })
 }
 
 #[derive(Debug, PartialEq)]
@@ -406,8 +331,6 @@ pub enum ReadError {
     TimeFormat(String),
     UncertaintyMissing,
     UnitNotImplemented,
-    ValueMissing(String),
-    ValueType(String),
 }
 
 pub fn try_to_read_field_as_string (map: &Map<String, Value>, key: &str) -> Option<String>{
@@ -448,7 +371,7 @@ pub fn try_to_read_reference_time(read_map: &Map<String, Value>) -> Option<Primi
     }
 }
 
-pub fn try_to_read_protocol_name<'a>(map: &'a toml::value::Table) -> Option<&str> {
+pub fn try_to_read_protocol_name(map: &toml::value::Table) -> Option<&str> {
     map.get("protocol").and_then(|value| value.as_table())
     .and_then(|p| p.get("name"))
     .and_then(|n| n.as_str())
