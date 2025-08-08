@@ -477,20 +477,25 @@ fn log_nelder_mead_solutions(component_id: &String, nm: &NelderMeadComponentProb
 
     if let Ok(file) = File::create(format!("{}/{}-fitting.txt", OUTPUT_FITTING_DIR, component_id)) {
         let mut buffer = BufWriter::new(file);
-        writeln!(buffer, "Component ancestor ID: {}", component_id).unwrap();
-        writeln!(buffer, "Component optimized parameters: {:?}", component_params_for_printing).unwrap();
-        writeln!(buffer, "Component optimization cost: {}", component_cost).unwrap();
-        writeln!(buffer, "Dimensionality of the optimization problem for this component: {}", nm.initial_simplex[0].len()).unwrap(); 
-        writeln!(buffer, "Initial simplex used for the optimization problem for this component: ").unwrap();
+        let dimensionality = nm.initial_simplex[0].len();
+        let concentration_times = (dimensionality - 1) / 2;
+        writeln!(buffer, "Ancestor ID for the component: {}", component_id).unwrap();
+        writeln!(buffer, "Dimensionality of the optimization problem for the component: {}", dimensionality).unwrap(); 
+        writeln!(buffer, "{}", format!(
+                "Parameters for a single Nelder-Mead problem are: [C0 and CMax values ({} times), µmax]",
+                concentration_times,
+            )
+        ).unwrap();
+        writeln!(buffer, "C0 - Cell concentration at the reference time (cells/m^3)\nCMax - Maximum cell concentration (cells/m^3)\nµmax - Maximum specific cell growth rate (1/h)\n").unwrap();
+        writeln!(buffer, "Optimized parameters for the component: {:?}", component_params_for_printing).unwrap();
+        writeln!(buffer, "Final optimization cost for the component: {}", component_cost).unwrap();
+        writeln!(buffer, "Initial simplex used for the component's optimization problem: ").unwrap();
         for vertex in &nm.initial_simplex {
             let formatted_row: Vec<String> = vertex.iter().map(|&value| format!("{:.3e}", value)).collect();
             writeln!(buffer, "[{}]", formatted_row.join(", ")).unwrap();
         }
         writeln!(buffer, "").unwrap();
         
-        writeln!(buffer, "Parameters for Single Nelder-Mead problems are: [C0, CMax, µmax]").unwrap();
-        writeln!(buffer, "C0 — Cell concentration at the reference time (cells/m^3)\nCMax — Maximal cell concentration (cells/m^3)\nµmax - Maximal specific cell growth rate (1/h)\n").unwrap();
-
             for (single_problem_id, single_problem) in &nm.problems {
                 let single_problem_params_unique = unique_param_chunks.next().unwrap_or(&[]);
                 let single_problem_params_all = vec![single_problem_params_unique[0], single_problem_params_unique[1], *component_params.last().unwrap()];
@@ -819,7 +824,7 @@ fn populate_site_pages(nodes: Nodes, components: &HashMap<String, Nodes>, soluti
         let svg_path = format!("{}/genealogy-{}.svg", OUTPUT_GENEALOGY_DIR, component_id);
         let svg_code = fs::read_to_string(svg_path).expect("svg file reading failed.");
         let svg_embedding = format!(r#"<body><div class="svg-container">{}</div></body>"#, svg_code);
-        let growth_curves_link = String::from(format!("![Component {} growth curve](/yeast-component-output/count/{}-count.svg)\n", component_id, component_id));
+        let growth_curves_link = String::from(format!("![Component {} growth curve](output/count/{}-count.svg)\n", component_id, component_id));
         
         let slant_page_text = format!(
             "+++\n\
@@ -857,6 +862,8 @@ fn flatten_components(components: HashMap<String, Nodes>) -> Nodes {
     flat_nodes
 }
 
+
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -868,7 +875,7 @@ fn main() {
             println!("Using links for the staging site. Using web links to the https://feature-main.alzymologist-github-io.pages.dev/ on genealogy graphs for website.");
             RunningMode::Staging
         } else if (args.len() >= 2 && args[1] == "--local" ) || (args.len() == 1) {
-            println!("Using links for the local server. Using web links to the http://127.0.0.1:1111/ on genealogy graphs for website.");
+            println!("Using direct links to files.");
             RunningMode::Local
         } else {
             eprintln!("Please specify correct execution mode using second argument to cargo.\n\
@@ -877,7 +884,12 @@ fn main() {
         }
     };
     
-    let (nodes, weblinks_to_nodes, pathlinks_to_nodes) = tomls_into_nodes_and_links(INPUT_DIR, running_mode);
+    // Go up one directory
+    let mut current_dir = env::current_dir().expect("Failed to get current directory");
+    current_dir.pop();
+    env::set_current_dir(&current_dir).expect("Failed to change directory");
+    
+    let (nodes, _weblinks_to_nodes, pathlinks_to_nodes) = tomls_into_nodes_and_links(INPUT_DIR, running_mode);
     let components = nodes_into_components(nodes.clone(), false);
     println!("Connectivity components created from nodes: {}", components.len());
     let problems = components_into_problems(components.clone());
@@ -900,7 +912,13 @@ fn main() {
     println!("Nodes left after thinning: {:?}", flatten_components(thinned_components.clone()).len()); 
     for (component_id, component) in &thinned_components {
         let genealogy_pathname = OUTPUT_GENEALOGY_DIR.to_owned() + "genealogy-" + &component_id;
-        plot_genealogy(genealogy_pathname, component.clone(), weblinks_to_nodes.clone(), false);
+        plot_genealogy(genealogy_pathname, component.clone(), pathlinks_to_nodes.clone(), false);
+    }
+
+    println!("Plotting component graphs.");
+    for (component_id, component) in &components {
+        let genealogy_pathname = OUTPUT_GENEALOGY_DIR.to_owned() + "genealogy-full-" + &component_id;
+        plot_genealogy(genealogy_pathname, component.clone(), pathlinks_to_nodes.clone(), true);
     }
 
     if Path::new(&YEAST_PAGE_PATH).exists() {
